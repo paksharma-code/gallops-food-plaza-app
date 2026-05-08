@@ -1,0 +1,7 @@
+Primary Category: Food & Drink
+Age Rating: 4+
+
+Note: Apple App Store allows ONE primary + ONE secondary category, but for restaurant/food chain apps the cleanest fit is a SINGLE category to maximise discoverability:
+   → Primary: Food & Drink (highest relevance for highway dining + offers)
+
+Play Store does not support secondary categories.

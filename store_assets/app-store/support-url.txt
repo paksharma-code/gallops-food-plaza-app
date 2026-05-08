@@ -1,0 +1,9 @@
+Support URL:        https://gallopsfoodplaza.com  (or mailto:Fedra@gallopsfoodplaza.in)
+Marketing URL (opt): https://gallopsfoodplaza.com
+Privacy Policy URL:  https://gallops-reserve-dine.preview.emergentagent.com/api/privacy
+Terms URL:           https://gallops-reserve-dine.preview.emergentagent.com/api/terms
+
+App Review Contact:
+  Name:  Ashok Sharma
+  Email: Fedra@gallopsfoodplaza.in
+  Phone: +91 77024 21761

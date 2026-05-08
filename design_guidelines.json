@@ -1,0 +1,120 @@
+{
+  "theme_and_archetype": {
+    "domain": "Food Plaza & Hospitality",
+    "theme": "Light Mode",
+    "archetype": "1 (Organic & Earthy)",
+    "vibe": "Warm, inviting, sensory, modern, and appetizing. Avoids sterile corporate 'SaaS' looks.",
+    "admin_differentiation": "The user-facing app uses generous padding, large border radii, and soft shadows for an immersive experience. The admin panel shifts to Archetype 4 (Swiss & High-Contrast) characteristics: tighter spacing, denser data views, flat surfaces with subtle borders, prioritizing speed and utility over emotion."
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Outfit (Geometric, warm, structural) - Fallback: System sans-serif",
+      "body": "Manrope (Clean, highly legible on mobile displays) - Fallback: System sans-serif"
+    },
+    "scale": {
+      "h1": "text-4xl tracking-tight leading-tight font-bold",
+      "h2": "text-3xl tracking-tight leading-snug font-bold",
+      "h3": "text-2xl tracking-tight leading-snug font-semibold",
+      "h4": "text-xl leading-snug font-semibold",
+      "body_large": "text-lg leading-relaxed",
+      "body_base": "text-base leading-relaxed",
+      "body_small": "text-sm leading-normal",
+      "overline": "text-xs tracking-[0.2em] uppercase font-bold"
+    },
+    "rules": [
+      "No Inter or Roboto for headings.",
+      "Headings strictly use tracking-tight.",
+      "Category chips use text-sm font-semibold.",
+      "Never center-align long paragraphs; left-align by default."
+    ]
+  },
+  "colors": {
+    "palette": {
+      "primary": "#C84B31",
+      "primary_light": "#E97A63",
+      "background_app": "#F9F6F0",
+      "surface_card": "#FFFFFF",
+      "text_primary": "#2D2825",
+      "text_secondary": "#7A7571",
+      "border": "#E5DFD3",
+      "success_open": "#4A7C59",
+      "error_closed": "#B33939"
+    },
+    "tailwind_mapping": {
+      "bg-background": "bg-[#F9F6F0]",
+      "bg-surface": "bg-[#FFFFFF]",
+      "text-primary": "text-[#2D2825]",
+      "text-secondary": "text-[#7A7571]",
+      "border-default": "border-[#E5DFD3]",
+      "bg-brand": "bg-[#C84B31]",
+      "text-brand": "text-[#C84B31]"
+    },
+    "rules": [
+      "Primary CTA buttons must use #C84B31 with #FFFFFF text.",
+      "Never use pure black (#000000). Always use #2D2825.",
+      "Use #4A7C59 for 'Open' status tags, #B33939 for 'Closed'.",
+      "Admin Panel: Change background to #FFFFFF and surface to #F9F6F0 for functional contrast."
+    ]
+  },
+  "spacing_and_layout": {
+    "spacing_scale": "p-2, p-4, p-6, p-8, p-12 (Generous padding)",
+    "border_radius": {
+      "user_app": "rounded-3xl (24px) for main cards, rounded-2xl (16px) for inner elements",
+      "admin_panel": "rounded-lg (8px) for denser functional views"
+    },
+    "layout_rules": [
+      "Mobile-First execution using ScrollView and FlatList.",
+      "Bento Grid: Use varying card sizes on the Home Screen for Offers of the Day.",
+      "Generous Spacing: Cards must have internal padding of p-6 to avoid text collision.",
+      "Images should never exceed 80vh. Hero images in Outlet Detail should be edge-to-edge (no horizontal padding)."
+    ]
+  },
+  "components": {
+    "cards": {
+      "user_outlet_card": "bg-[#FFFFFF] rounded-3xl p-4 shadow-[0_8px_30px_rgba(45,40,37,0.06)] border border-[#E5DFD3]/50. Image occupies top 60%, content bottom 40%.",
+      "admin_card": "bg-[#FFFFFF] rounded-lg p-4 border border-[#E5DFD3] shadow-sm. Flat design, no heavy drop shadow."
+    },
+    "buttons": {
+      "primary": "bg-[#C84B31] text-white rounded-2xl py-4 px-6 font-bold text-center flex-row justify-center items-center active:opacity-80",
+      "secondary": "bg-[#F9F6F0] text-[#2D2825] rounded-2xl py-4 px-6 font-bold text-center border border-[#E5DFD3]",
+      "call_whatsapp": "rounded-full p-3 flex justify-center items-center",
+      "category_chip": "px-5 py-2 rounded-full border border-[#E5DFD3] mr-2 active:bg-[#C84B31] active:text-white"
+    },
+    "inputs": {
+      "user_form": "bg-[#FFFFFF] border border-[#E5DFD3] rounded-2xl px-4 py-4 text-[#2D2825] font-body text-base placeholder-[#7A7571]",
+      "admin_form": "bg-[#FFFFFF] border border-[#E5DFD3] rounded-md px-3 py-3 text-[#2D2825] font-body text-sm"
+    }
+  },
+  "screens": {
+    "user_home": "Header with greeting and search. 'Offers of the Day' horizontal FlatList using large bento-style cards. Vertical FlatList for Outlet listing cards. Bottom Tab Navigation (Home, Search, Profile).",
+    "outlet_detail": "Edge-to-edge hero image at the top. Back button overlay in glassmorphism (bg-white/70 backdrop-blur-md). Outlet info (Name, Status, Hours) pushed up via negative margin to overlap hero image. Horizontal scroll for categories. Vertical list for menu items.",
+    "reservation_form": "Clean, input-heavy screen. Only accessible from Gallops Restaurant. Date and Time pickers, Guest counter.",
+    "admin_dashboard": "Tabbed layout (Outlets, Menu, Offers, Reservations). Dense lists with swipe actions or edit/delete icons. Status toggles (Open/Closed). Image upload placeholders."
+  },
+  "assets": {
+    "images": [
+      {
+        "category": "hero_offer_indian",
+        "url": "https://static.prod-images.emergentagent.com/jobs/96e3f558-0c2d-422f-809b-d051bc4aeb09/images/f53cfa62cad475d86a5e9c34857b260f5b8d98f8f873bdaf33b9131108b67f48.png",
+        "description": "High quality flatlay of modern Indian thali (Use for Offers of the Day banner)"
+      },
+      {
+        "category": "outlet_fast_food",
+        "url": "https://images.unsplash.com/photo-1632898657999-ae6920976661?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwyfHxkZWxpY2lvdXMlMjBidXJnZXIlMjBmcmllcyUyMGZhc3QlMjBmb29kfGVufDB8fHx8MTc3NjQxNjY3NXww&ixlib=rb-4.1.0&q=85",
+        "description": "Burger and fries (Use as thumbnail for fast food outlet)"
+      },
+      {
+        "category": "outlet_cafe",
+        "url": "https://images.unsplash.com/photo-1763683944193-c4635a3d3999?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzN8MHwxfHNlYXJjaHwyfHxjb2ZmZWUlMjBzaG9wJTIwbGF0dGUlMjBhcnQlMjBwYXN0cnl8ZW58MHx8fHwxNzc2NDE2Njc1fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Coffee and pastries (Use as thumbnail for cafe outlet)"
+      }
+    ]
+  },
+  "technical_instructions": {
+    "framework": "React Native (Expo) using .js files (not .tsx)",
+    "styling": "Use standard React Native StyleSheet or NativeWind (Tailwind). The guidelines provide Tailwind classes for ease of mapping.",
+    "icons": "Use lucide-react-native or @expo/vector-icons.",
+    "testing": "All interactive elements (buttons, inputs, tabs) MUST have a `testID` attribute (React Native equivalent of data-testid). Use kebab-case (e.g., `testID=\"call-outlet-button\"`).",
+    "motion": "Use React Native Reanimated or LayoutAnimation for smooth transitions on layout changes (e.g., opening a category, filtering menus). Add active opacity to all TouchableOpacities."
+  }
+}
