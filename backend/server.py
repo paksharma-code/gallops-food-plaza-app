@@ -468,13 +468,18 @@ def _outlet_priority(name: str) -> int:
 
 
 def _sorted_outlets(outlets: list[dict]) -> list[dict]:
-    """Sort outlets by (brand priority, name alphabetical, original created_at)."""
+    """Sort outlets by (brand priority, name alphabetical, original created_at).
+
+    `created_at` may be a `datetime` (modern Pydantic insert) OR an ISO `str`
+    (early seed-script insert). Coerce to `str` so cross-type compares don't
+    explode when ties happen on (priority, name).
+    """
     return sorted(
         outlets,
         key=lambda o: (
             _outlet_priority(o.get("name", "")),
             (o.get("name") or "").strip().lower(),
-            (o.get("created_at") or ""),
+            str(o.get("created_at") or ""),
         ),
     )
 

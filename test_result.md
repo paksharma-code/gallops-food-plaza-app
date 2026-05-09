@@ -1374,11 +1374,11 @@ backend:
 
   - task: "Brand-priority outlet sort on /api/bootstrap (CRITICAL FAIL — 500)"
     implemented: true
-    working: false
+    working: true
     file: "backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: false
         agent: "testing"
@@ -1495,3 +1495,79 @@ agent_communication:
       deterministic).
 
       No backend code was modified by testing. Cleanup complete.
+
+# --- Session 2026-05-09 RE-TEST after brand-priority sort fix ----------------
+backend:
+  - task: "Brand-priority outlet sort on /api/bootstrap (re-test after fix)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          RE-TEST 2026-05-09 after fix
+          (`(o.get("created_at") or "")` -> `str(o.get("created_at") or "")`
+          on line 482 of /app/backend/server.py) — 30/30 PASS in
+          /app/backend_test_brand_sort_retest.py against
+          https://gallops-reserve-dine.preview.emergentagent.com/api.
+
+          A. GET /api/bootstrap → 200 OK. ✓
+             - dict with keys plazas (20), outlets (87), offers (1).
+             - All 87 outlets stripped of logo/image2/image3/description.
+             - All offers is_active=true.
+             - When grouped by plaza_id (7 plazas with outlets), every
+               plaza's outlets follow the brand-priority order
+               (Gallops Restaurant → Domino's → Subway → La Pino'z Pizza →
+               Lord Petrick → MMC → alphabetical). No mismatches.
+
+          B. GET /api/outlets?lite=true (no plaza_id) → 200 OK. ✓
+             - Returns 87 outlets, list shape.
+             - Lite projection: logo/image2/image3/description absent on
+               every outlet.
+             - Per-plaza brand-priority order verified across the global
+               response. Previously crashed with the same TypeError.
+
+          C. Smoke confirmations (all PASS):
+             - GET /api/outlets?lite=true&plaza_id=<Fedra>: first 5 names
+               exactly = Gallops Restaurant, Dominoz, Subway, Lapinoz,
+               Lord Petrick. ✓
+             - POST /api/auth/login admin@gallops.com / gfp@1234 → 200,
+               3-part JWT in `access_token`. ✓
+             - One-mobile-per-day soft guard (mobile=9876541230):
+               1st POST → fresh 8-char token (CT7B8RE9), already_claimed
+               not true. 2nd POST same mobile → SAME id + SAME token,
+               already_claimed=true, routed_tier='existing',
+               whatsapp_link non-empty. ✓
+             - GET /api/privacy & /api/terms → 200, Content-Type text/html. ✓
+
+          Cleanup: throwaway claim 058d85de-1637-450d-8207-7627e9c6d1bb
+          deleted via DELETE /api/admin/offer-claims/{id} (200). No backend
+          code changes made.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      Brand-priority sort fix VERIFIED. 30/30 assertions PASS in
+      /app/backend_test_brand_sort_retest.py.
+
+      Previously-failing items now green:
+        - GET /api/bootstrap → 200 (was 500 with TypeError comparing
+          datetime vs str). Outlets are brand-sorted globally and per
+          plaza_id.
+        - GET /api/outlets?lite=true (no plaza_id) → 200, same brand-
+          priority order applied; heavy fields stripped.
+
+      Previously-passing smoke items still green:
+        - GET /api/outlets?lite=true&plaza_id=<Fedra> first 5 = Gallops
+          Restaurant, Dominoz, Subway, Lapinoz, Lord Petrick.
+        - POST /api/auth/login admin@gallops.com / gfp@1234 → 200 + JWT.
+        - One-mobile-per-day soft guard intact (same id + same token on
+          retry).
+        - GET /api/privacy + /api/terms → 200 HTML.
+
+      Cleanup: 1 throwaway claim deleted. No backend code changes.
+      Main agent can summarise and finish.
