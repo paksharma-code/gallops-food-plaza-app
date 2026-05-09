@@ -708,7 +708,38 @@ agent_communication:
 
   - agent: "main"
     message: |
-      Session 2026-04-28 (Batch C — performance):
+      Brand-priority outlet sort applied to /api/outlets and /api/bootstrap.
+
+      Order (within every plaza):
+        1. Gallops Restaurant   (flagship — always first)
+        2. Domino's             (matches "Domino's", "Dominos", "Dominoz")
+        3. Subway
+        4. La Pino'z Pizza      (matches "Lapinoz", "La Pino'z Pizza", etc.)
+        5. Lord Petrick
+        6. MMC
+        7. Everything else      (alphabetical)
+
+      Code lives in /app/backend/server.py:
+        - PRIORITY_BRANDS list (regex per brand)
+        - _outlet_priority(name) helper
+        - _sorted_outlets(list) helper
+        - applied in /bootstrap and /outlets (both lite & full modes)
+
+      Manual smoke tests passed on Fedra, Anand, Tansa, Mahuva, Limbdi.
+
+      Please regression-test:
+        1. GET /api/outlets?lite=true&plaza_id=<Fedra id> → first 5 outlets
+           must be Gallops Restaurant, Dominoz, Subway, Lapinoz, Lord Petrick.
+        2. GET /api/outlets?lite=true&plaza_id=<Limbdi id> → first 3 must be
+           Gallops Restaurant, Domino's, La Pino'z Pizza.
+        3. GET /api/outlets?lite=true&plaza_id=<Mahuva id> → only Gallops
+           Restaurant present (single-outlet plaza).
+        4. GET /api/outlets (full mode) → also brand-sorted.
+        5. GET /api/bootstrap → outlets array brand-sorted globally.
+        6. Smoke regression on previously-passing endpoints (auth, claims
+           one-mobile-per-day, plazas, lite/full image2/image3 round-trip,
+           gzip, privacy/terms HTML pages return 200, claims xlsx export).
+      Auth: admin@gallops.com / gfp@1234.
 
       BACKEND CHANGES:
       - Added GZipMiddleware (minimum_size=1024). Should reduce all JSON
@@ -1204,7 +1235,8 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Brand-priority outlet sort (PRIORITY_BRANDS / _sorted_outlets) on /api/outlets and /api/bootstrap"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1293,3 +1325,173 @@ agent_communication:
 
       No backend code changes were made. Main agent please fix (1) and
       (2) above and trigger a re-test.
+
+
+# --- Session 2026-05-09 backend regression (brand-priority outlet sort) -------
+backend:
+  - task: "Brand-priority outlet sort on /api/outlets per-plaza (lite + full)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Target: https://gallops-reserve-dine.preview.emergentagent.com/api
+          Harness: /app/backend_test.py — per-plaza brand-priority sort PASS.
+
+          A. Fedra (lite=true, plaza_id=4722073e-...) — 20 outlets returned.
+             Top-5 names exactly match the spec:
+               1. Gallops Restaurant
+               2. Dominoz             (Domino's variant)
+               3. Subway
+               4. Lapinoz             (La Pino'z Pizza variant)
+               5. Lord Petrick
+             Tail (Adil Qadri … Waffle) is sorted alphabetical (case-insensitive). ✓
+
+          B. Limbdi (lite=true, plaza_id=51114145-...) — 13 outlets.
+             Top-3 = Gallops Restaurant, Domino's, La Pino'z Pizza.
+             Tail alphabetical. ✓
+
+          C. Mahuva (lite=true, plaza_id=ee40ae35-...) — exactly 1 outlet
+             ("Gallops Restaurant"). ✓
+
+          D. Tansa (lite=true, plaza_id=26f89939-...) — 9 outlets.
+             Top-2 = Gallops Restaurant, La Pino'z Pizza.
+             Tail alphabetical (Coffee Culture … Tea Post). ✓
+
+          E. Anand (lite=true, plaza_id=930180f4-...) — 19 outlets.
+             [0] = Gallops Restaurant; no other priority brand present;
+             tail strictly alphabetical (Crunch Corner … WELCOME 36). ✓
+
+          F. Full mode (no lite, plaza_id=Limbdi) — 13 outlets in same
+             brand-priority order. Each outlet still includes
+             `logo` / `image2` / `image3` / `description` keys (verified on
+             every outlet, not just the first). ✓
+
+  - task: "Brand-priority outlet sort on /api/bootstrap (CRITICAL FAIL — 500)"
+    implemented: true
+    working: false
+    file: "backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: |
+          ❌ CRITICAL: GET /api/bootstrap returns 500 Internal Server Error.
+
+          Backend traceback (/var/log/supervisor/backend.err.log):
+            File "/app/backend/server.py", line 508, in bootstrap
+              outlets_raw = _sorted_outlets(outlets_raw)
+            File "/app/backend/server.py", line 472, in _sorted_outlets
+              return sorted(
+            TypeError: '<' not supported between instances of
+                       'datetime.datetime' and 'str'
+
+          Root cause: the new tie-breaker `(o.get("created_at") or "")` in
+          _sorted_outlets compares values across the whole outlets
+          collection. Mongo stores `created_at` as a mix of native
+          `datetime` (recent inserts via Pydantic `datetime.now(timezone.utc)`)
+          and ISO `str` (older seed-script inserts). When two outlets share
+          (priority, name) — or even just adjacent items during merge sort —
+          Python attempts to compare these mixed types and crashes.
+
+          Reproduction:
+            GET /api/bootstrap                      → 500 (always)
+            GET /api/outlets?lite=true (NO plaza)   → 500
+            GET /api/outlets?plaza_id=<single plaza>&lite=true → 200
+              (works only because per-plaza subsets happen to have
+              consistent created_at types).
+            GET /api/outlets (no lite, no plaza)    → 200
+              (works because Outlet(**o) coerces created_at to datetime
+              BEFORE _sorted_outlets is called.)
+
+          Suggested fix for main agent (one-line):
+            Replace
+              (o.get("created_at") or "")
+            with
+              str(o.get("created_at") or "")
+            in _sorted_outlets — strings sort consistently and the value
+            is only a tie-breaker. OR coerce to datetime via
+              isinstance(v, datetime) and v or datetime.fromisoformat(v).
+            OR drop the created_at tie-breaker entirely (priority + name
+            already produce a stable order).
+
+          Impact: every cold-start of the customer app calls /bootstrap.
+          With this 500 the home screen falls back to /api/plazas only and
+          every plaza tap re-fetches outlets individually — defeats the
+          performance optimisation. Must be fixed before release.
+
+  - task: "Smoke regression (auth, privacy, terms, xlsx export, one-mobile-per-day)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          All 200 / behaviour intact:
+            POST /api/auth/login admin@gallops.com / gfp@1234 → 200,
+              3-part JWT in `token`. ✓
+            GET  /api/privacy → 200, Content-Type text/html. ✓
+            GET  /api/terms   → 200, Content-Type text/html. ✓
+            GET  /api/admin/offer-claims/export with admin Bearer token
+              → 200, Content-Type
+              application/vnd.openxmlformats-officedocument.spreadsheetml.sheet. ✓
+            POST /api/offer-claims (mobile=9812340099):
+              1st call → 200, fresh 8-char token (H3DH373S),
+                already_claimed absent.
+              2nd call same mobile → 200, SAME id + SAME token,
+                already_claimed=true (soft guard intact). ✓
+            DELETE /api/admin/offer-claims/{id} → 200 (cleanup). ✓
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      Brand-priority outlet sort regression — partial PASS, ONE CRITICAL FAIL.
+
+      ✅ PASS (per-plaza ordering, both lite & full modes):
+        A. Fedra lite top-5 = Gallops Restaurant, Dominoz, Subway, Lapinoz,
+           Lord Petrick; tail alphabetical (20 outlets total).
+        B. Limbdi lite top-3 = Gallops Restaurant, Domino's, La Pino'z Pizza;
+           tail alphabetical.
+        C. Mahuva lite = single outlet (Gallops Restaurant).
+        D. Tansa lite top-2 = Gallops Restaurant, La Pino'z Pizza; tail
+           alphabetical.
+        E. Anand lite [0] = Gallops Restaurant; no other priority brand
+           present; tail strictly alphabetical.
+        F. Full /api/outlets?plaza_id=<Limbdi> returns the same brand-priority
+           order AND every outlet still has logo/image2/image3/description keys.
+
+      ❌ FAIL — G. /api/bootstrap returns 500.
+        TypeError: '<' not supported between instances of 'datetime.datetime'
+        and 'str' inside _sorted_outlets when sorting the GLOBAL outlets list
+        (87 outlets across all plazas). Mongo stores `created_at` as a mix of
+        native datetime objects and ISO strings depending on the writer
+        (Pydantic insert vs. seed-script insert). The new tie-breaker
+        `(o.get("created_at") or "")` compares mixed types and crashes.
+        Same crash also affects GET /api/outlets?lite=true with NO plaza_id
+        (works only when filtered to a single plaza).
+
+      ✅ PASS — H. Smoke regression:
+        - POST /api/auth/login admin@gallops.com / gfp@1234 → 200 + JWT.
+        - GET /api/privacy & /api/terms → 200 HTML.
+        - GET /api/admin/offer-claims/export → 200 xlsx content-type.
+        - POST /api/offer-claims one-mobile-per-day soft guard intact;
+          throwaway claim cleaned up via DELETE.
+
+      Recommended one-line fix in /app/backend/server.py
+      `_sorted_outlets`:
+          (o.get("created_at") or "")   →   str(o.get("created_at") or "")
+      Or drop created_at as a tie-breaker entirely (priority + name is already
+      deterministic).
+
+      No backend code was modified by testing. Cleanup complete.

@@ -1,362 +1,375 @@
 """
-Backend regression test harness — Session 2026-04-28 Batch C
-(bootstrap endpoint, lite=true outlets, GZip middleware, smoke regression).
+Backend regression for Gallops Food Plaza — brand-priority outlet sort.
 
-Run:  python /app/backend_test.py
+Target API base: derived from /app/frontend/.env (EXPO_PUBLIC_BACKEND_URL) + /api.
 """
-import json
-import gzip
 import os
+import re
 import sys
+import json
 import time
 import requests
 
-BASE_URL = "https://gallops-reserve-dine.preview.emergentagent.com/api"
-ADMIN_EMAIL = "admin@gallops.com"
-ADMIN_PASSWORD = "admin123"
-
-GREEN = "\033[92m"
-RED = "\033[91m"
-YELLOW = "\033[93m"
-RESET = "\033[0m"
-
-PASS = 0
-FAIL = 0
-FAILURES: list[str] = []
-
-
-def check(label: str, cond: bool, detail: str = ""):
-    global PASS, FAIL
-    if cond:
-        PASS += 1
-        print(f"  {GREEN}PASS{RESET}  {label}")
-    else:
-        FAIL += 1
-        FAILURES.append(f"{label} :: {detail}")
-        print(f"  {RED}FAIL{RESET}  {label}  {detail}")
-
-
-def header(title):
-    print(f"\n{YELLOW}=== {title} ==={RESET}")
-
-
-def main():
-    session = requests.Session()
-
-    # ---------- F: Admin login ----------
-    header("F. POST /api/auth/login (admin)")
-    r = session.post(f"{BASE_URL}/auth/login",
-                     json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
-                     timeout=30)
-    check("login 200", r.status_code == 200, f"status={r.status_code} body={r.text[:200]}")
-    token = None
-    if r.status_code == 200:
-        j = r.json()
-        token = j.get("token")
-        check("login returns token", bool(token) and isinstance(token, str) and token.count(".") == 2,
-              f"token={token!r}")
-    if not token:
-        print(f"{RED}Cannot proceed without admin token.{RESET}")
-        sys.exit(1)
-    auth_headers = {"Authorization": f"Bearer {token}"}
-
-    # ---------- A: GET /api/bootstrap (no auth) ----------
-    header("A. GET /api/bootstrap (no auth) — projection check")
-    r = session.get(f"{BASE_URL}/bootstrap", timeout=30)
-    check("bootstrap 200", r.status_code == 200, f"status={r.status_code}")
-    plazas = outlets = offers = []
-    if r.status_code == 200:
-        j = r.json()
-        check("body is dict with plazas/outlets/offers keys",
-              isinstance(j, dict) and set(["plazas", "outlets", "offers"]).issubset(j.keys()),
-              f"keys={list(j.keys()) if isinstance(j, dict) else type(j)}")
-        plazas = j.get("plazas", [])
-        outlets = j.get("outlets", [])
-        offers = j.get("offers", [])
-        check("plazas is list", isinstance(plazas, list))
-        check("outlets is list", isinstance(outlets, list))
-        check("offers is list", isinstance(offers, list))
-        check("len(plazas) > 0", len(plazas) > 0, f"len={len(plazas)}")
-        check("len(outlets) > 0", len(outlets) > 0, f"len={len(outlets)}")
-
-        # Lite projection: logo/image2/image3/description MUST be missing
-        missing_logo = all("logo" not in o for o in outlets)
-        missing_img2 = all("image2" not in o for o in outlets)
-        missing_img3 = all("image3" not in o for o in outlets)
-        missing_desc = all("description" not in o for o in outlets)
-        # find offending outlet for debug
-        def _with_field(field):
-            for o in outlets:
-                if field in o:
-                    return o.get("id") or o.get("name")
-            return None
-        check("bootstrap outlets: NO 'logo'", missing_logo,
-              f"sample offender={_with_field('logo')}")
-        check("bootstrap outlets: NO 'image2'", missing_img2,
-              f"sample offender={_with_field('image2')}")
-        check("bootstrap outlets: NO 'image3'", missing_img3,
-              f"sample offender={_with_field('image3')}")
-        check("bootstrap outlets: NO 'description'", missing_desc,
-              f"sample offender={_with_field('description')}")
-
-        required_fields = ["id", "plaza_id", "name", "mobile",
-                           "opening_time", "closing_time", "time_slots",
-                           "is_reservation_enabled", "is_offers_enabled"]
-        missing_map = {}
-        for f in required_fields:
-            bad = [o.get("id") for o in outlets if f not in o]
-            if bad:
-                missing_map[f] = bad[:3]
-        check("bootstrap outlets: required fields all present", not missing_map,
-              f"missing={missing_map}")
-
-        # offers must be active-only
-        all_active = all(o.get("is_active") is True for o in offers) if offers else True
-        check("bootstrap offers: is_active == true for all",
-              all_active, f"non_active_count={sum(1 for o in offers if o.get('is_active') is not True)}")
-
-    # ---------- B: GET /api/outlets?lite=true ----------
-    header("B. GET /api/outlets?lite=true")
-    r = session.get(f"{BASE_URL}/outlets", params={"lite": "true"}, timeout=30)
-    check("outlets?lite=true 200", r.status_code == 200, f"status={r.status_code}")
-    lite_outlets = []
-    if r.status_code == 200:
-        lite_outlets = r.json()
-        check("lite outlets is list", isinstance(lite_outlets, list), f"type={type(lite_outlets)}")
-        check("lite outlets: NO 'logo'",
-              all("logo" not in o for o in lite_outlets))
-        check("lite outlets: NO 'image2'",
-              all("image2" not in o for o in lite_outlets))
-        check("lite outlets: NO 'image3'",
-              all("image3" not in o for o in lite_outlets))
-        check("lite outlets: NO 'description'",
-              all("description" not in o for o in lite_outlets))
-        check("lite outlets len > 0", len(lite_outlets) > 0, f"len={len(lite_outlets)}")
-
-    # ---------- C: GET /api/outlets?lite=true&plaza_id={id} ----------
-    header("C. GET /api/outlets?lite=true&plaza_id={existing}")
-    # pick a plaza id that we know has outlets
-    plaza_id_target = None
-    if plazas and lite_outlets:
-        # find a plaza that has >=1 outlet
-        plaza_outlet_ids = {o.get("plaza_id") for o in lite_outlets if o.get("plaza_id")}
-        for p in plazas:
-            if p.get("id") in plaza_outlet_ids:
-                plaza_id_target = p.get("id")
+# --- Resolve API base from frontend/.env (production URL) ---------------------
+def _api_base() -> str:
+    env_path = "/app/frontend/.env"
+    base = None
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("EXPO_PUBLIC_BACKEND_URL="):
+                base = line.split("=", 1)[1].strip().strip('"').strip("'")
                 break
-    if plaza_id_target:
-        r = session.get(f"{BASE_URL}/outlets",
-                        params={"lite": "true", "plaza_id": plaza_id_target},
-                        timeout=30)
-        check("outlets?lite=true&plaza_id=... 200",
-              r.status_code == 200, f"status={r.status_code}")
-        if r.status_code == 200:
-            filtered = r.json()
-            check(f"filter returns >=1 outlet for plaza {plaza_id_target[:8]}",
-                  len(filtered) > 0, f"len={len(filtered)}")
-            check("all outlets match plaza_id filter",
-                  all(o.get("plaza_id") == plaza_id_target for o in filtered),
-                  f"mismatches={[o.get('plaza_id') for o in filtered if o.get('plaza_id') != plaza_id_target][:3]}")
-            check("filtered outlets: NO 'logo'",
-                  all("logo" not in o for o in filtered))
-            check("filtered outlets: NO 'description'",
-                  all("description" not in o for o in filtered))
+    assert base, "EXPO_PUBLIC_BACKEND_URL not set in /app/frontend/.env"
+    return base.rstrip("/") + "/api"
+
+
+API = _api_base()
+print(f"API base: {API}")
+
+ADMIN_EMAIL = "admin@gallops.com"
+ADMIN_PASSWORD = "gfp@1234"
+
+results = []  # list of (label, ok, detail)
+
+
+def record(label: str, ok: bool, detail: str = ""):
+    status = "PASS" if ok else "FAIL"
+    print(f"[{status}] {label}" + (f" — {detail}" if detail else ""))
+    results.append((label, ok, detail))
+
+
+def expect(label: str, cond: bool, detail: str = ""):
+    record(label, bool(cond), detail)
+    return bool(cond)
+
+
+# --- Auth (used by H + cleanup) ----------------------------------------------
+def login_admin() -> str:
+    r = requests.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=30)
+    expect("H1: POST /auth/login admin@gallops.com / gfp@1234 → 200",
+           r.status_code == 200, f"status={r.status_code} body={r.text[:200]}")
+    if r.status_code != 200:
+        return ""
+    body = r.json()
+    token = body.get("token") or body.get("access_token") or ""
+    expect("H1b: login response includes a token (3-part JWT)",
+           bool(token) and token.count(".") == 2,
+           f"token_present={bool(token)} parts={token.count('.') if token else 0}")
+    return token
+
+
+# --- Helpers ------------------------------------------------------------------
+PRIORITY_LABELS = ["Gallops Restaurant", "Domino's", "Subway", "La Pino'z Pizza", "Lord Petrick", "MMC"]
+PRIORITY_PATTERNS = [
+    (r"^gallops\s+restaurant$|^gallops$", "Gallops Restaurant"),
+    (r"^domino[s'\u2019z]*\b", "Domino's"),
+    (r"^subway\b", "Subway"),
+    (r"^la\s*pino[\u2019'z]*\b|^lapino[\u2019'z]*\b", "La Pino'z Pizza"),
+    (r"^lord\s+petrick\b", "Lord Petrick"),
+    (r"^mmc\b", "MMC"),
+]
+
+
+def brand_priority_index(name: str) -> int:
+    n = re.sub(r"\s+", " ", (name or "").strip().lower())
+    for idx, (pat, _label) in enumerate(PRIORITY_PATTERNS):
+        if re.search(pat, n, re.IGNORECASE):
+            return idx
+    return len(PRIORITY_PATTERNS) + 100
+
+
+def assert_priority_then_alpha(label_prefix: str, names: list[str]) -> bool:
+    """Verify that priority brands appear in correct relative order at the
+    start (whichever priority brands are present) and the rest is sorted
+    case-insensitive alphabetically."""
+    prio_indices = [brand_priority_index(n) for n in names]
+    # Priority brands should form a non-decreasing prefix
+    last_p = -1
+    transition_at = None
+    for i, p in enumerate(prio_indices):
+        if p < len(PRIORITY_PATTERNS):
+            if p < last_p:
+                expect(f"{label_prefix}: priority order non-decreasing at idx {i}", False,
+                       f"name='{names[i]}' p={p} prev={last_p} all={names}")
+                return False
+            last_p = p
+        else:
+            transition_at = i
+            break
+    # After transition, every entry must be non-priority and alphabetical
+    if transition_at is not None:
+        rest = names[transition_at:]
+        for r in rest:
+            if brand_priority_index(r) < len(PRIORITY_PATTERNS):
+                expect(f"{label_prefix}: priority brand appears AFTER non-priority", False,
+                       f"name='{r}' rest={rest}")
+                return False
+        rest_lower = [n.lower() for n in rest]
+        if rest_lower != sorted(rest_lower):
+            expect(f"{label_prefix}: tail is alphabetical (case-insensitive)", False,
+                   f"got={rest_lower} expected={sorted(rest_lower)}")
+            return False
+    return True
+
+
+# --- Fetch plazas once --------------------------------------------------------
+plazas_resp = requests.get(f"{API}/plazas", timeout=30)
+expect("Setup: GET /plazas 200", plazas_resp.status_code == 200, f"status={plazas_resp.status_code}")
+plazas = plazas_resp.json() if plazas_resp.status_code == 200 else []
+plazas_by_id = {p["id"]: p for p in plazas}
+plazas_by_name = {p["name"]: p for p in plazas}
+
+FEDRA_ID = "4722073e-e775-47cd-8b78-fcb749ef1f8e"
+LIMBDI_ID = "51114145-d24b-47de-b74d-ac7505764577"
+MAHUVA_ID = "ee40ae35-aaae-480b-8c27-094f1440b6b6"
+TANSA_ID = (plazas_by_name.get("Tansa") or {}).get("id")
+ANAND_ID = (plazas_by_name.get("Anand") or {}).get("id")
+
+print(f"\nPlazas resolved: Fedra={FEDRA_ID}, Limbdi={LIMBDI_ID}, Mahuva={MAHUVA_ID}, Tansa={TANSA_ID}, Anand={ANAND_ID}")
+print(f"Plaza names found: {sorted([p['name'] for p in plazas])}\n")
+
+
+# --- A. Fedra plaza (lite) ---------------------------------------------------
+print("=" * 60)
+print("A. Fedra plaza (lite=true)")
+r = requests.get(f"{API}/outlets", params={"lite": "true", "plaza_id": FEDRA_ID}, timeout=30)
+expect("A1: GET /outlets?lite=true&plaza_id=Fedra → 200", r.status_code == 200, f"status={r.status_code}")
+fedra = r.json() if r.status_code == 200 else []
+fedra_names = [o.get("name", "") for o in fedra]
+print(f"   Fedra outlet names ({len(fedra_names)}): {fedra_names}")
+
+if len(fedra_names) >= 5:
+    first5 = fedra_names[:5]
+    expect("A2: Fedra[0] == 'Gallops Restaurant'", first5[0] == "Gallops Restaurant", f"got='{first5[0]}'")
+    # Variant Domino's: "Dominoz" expected
+    expect("A3: Fedra[1] is a Domino's variant", brand_priority_index(first5[1]) == 1, f"got='{first5[1]}'")
+    expect("A4: Fedra[2] == 'Subway'", brand_priority_index(first5[2]) == 2, f"got='{first5[2]}'")
+    expect("A5: Fedra[3] is a La Pino'z variant", brand_priority_index(first5[3]) == 3, f"got='{first5[3]}'")
+    expect("A6: Fedra[4] == 'Lord Petrick'", brand_priority_index(first5[4]) == 4, f"got='{first5[4]}'")
+else:
+    expect("A2-6: Fedra has at least 5 outlets", False, f"got={len(fedra_names)}")
+
+# A7: tail alphabetical & priority prefix correct
+assert_priority_then_alpha("A7 Fedra", fedra_names)
+
+
+# --- B. Limbdi plaza (lite) --------------------------------------------------
+print("=" * 60)
+print("B. Limbdi plaza (lite=true)")
+r = requests.get(f"{API}/outlets", params={"lite": "true", "plaza_id": LIMBDI_ID}, timeout=30)
+expect("B1: GET /outlets?lite=true&plaza_id=Limbdi → 200", r.status_code == 200, f"status={r.status_code}")
+limbdi = r.json() if r.status_code == 200 else []
+limbdi_names = [o.get("name", "") for o in limbdi]
+print(f"   Limbdi outlet names ({len(limbdi_names)}): {limbdi_names}")
+
+if len(limbdi_names) >= 3:
+    expect("B2: Limbdi[0] == 'Gallops Restaurant'", limbdi_names[0] == "Gallops Restaurant", f"got='{limbdi_names[0]}'")
+    expect("B3: Limbdi[1] is a Domino's variant", brand_priority_index(limbdi_names[1]) == 1, f"got='{limbdi_names[1]}'")
+    expect("B4: Limbdi[2] is a La Pino'z variant", brand_priority_index(limbdi_names[2]) == 3, f"got='{limbdi_names[2]}'")
+else:
+    expect("B2-4: Limbdi has at least 3 outlets", False, f"got={len(limbdi_names)}")
+
+assert_priority_then_alpha("B5 Limbdi", limbdi_names)
+
+
+# --- C. Mahuva plaza ---------------------------------------------------------
+print("=" * 60)
+print("C. Mahuva plaza (single-outlet)")
+r = requests.get(f"{API}/outlets", params={"lite": "true", "plaza_id": MAHUVA_ID}, timeout=30)
+expect("C1: GET /outlets?lite=true&plaza_id=Mahuva → 200", r.status_code == 200, f"status={r.status_code}")
+mahuva = r.json() if r.status_code == 200 else []
+mahuva_names = [o.get("name", "") for o in mahuva]
+print(f"   Mahuva outlet names ({len(mahuva_names)}): {mahuva_names}")
+expect("C2: Mahuva has exactly one outlet", len(mahuva_names) == 1, f"got={len(mahuva_names)}")
+expect("C3: Mahuva outlet is 'Gallops Restaurant'",
+       len(mahuva_names) == 1 and mahuva_names[0] == "Gallops Restaurant",
+       f"names={mahuva_names}")
+
+
+# --- D. Tansa plaza ----------------------------------------------------------
+print("=" * 60)
+print("D. Tansa plaza")
+if not TANSA_ID:
+    expect("D1: Tansa plaza found via /api/plazas", False, "no plaza named 'Tansa' in response")
+else:
+    r = requests.get(f"{API}/outlets", params={"lite": "true", "plaza_id": TANSA_ID}, timeout=30)
+    expect("D1: GET /outlets?lite=true&plaza_id=Tansa → 200", r.status_code == 200, f"status={r.status_code}")
+    tansa = r.json() if r.status_code == 200 else []
+    tansa_names = [o.get("name", "") for o in tansa]
+    print(f"   Tansa outlet names ({len(tansa_names)}): {tansa_names}")
+    if len(tansa_names) >= 2:
+        expect("D2: Tansa[0] == 'Gallops Restaurant'", tansa_names[0] == "Gallops Restaurant", f"got='{tansa_names[0]}'")
+        expect("D3: Tansa[1] is a La Pino'z variant", brand_priority_index(tansa_names[1]) == 3, f"got='{tansa_names[1]}'")
     else:
-        check("found a plaza with outlets to filter on", False,
-              "could not pick a plaza_id target")
-
-    # ---------- D: GET /api/outlets (no lite) — MUST include logo ----------
-    header("D. GET /api/outlets (no lite) — full payload includes logo")
-    r = session.get(f"{BASE_URL}/outlets", timeout=60)
-    check("outlets (no lite) 200", r.status_code == 200, f"status={r.status_code}")
-    if r.status_code == 200:
-        full = r.json()
-        check("full outlets len > 0", len(full) > 0)
-        has_logo_key = all("logo" in o for o in full)
-        check("all outlets include 'logo' key (even if null/empty)", has_logo_key,
-              f"missing sample={[o.get('name') for o in full if 'logo' not in o][:3]}")
-        non_null_logo = [o for o in full
-                         if o.get("logo") not in (None, "", False)]
-        check("at least one outlet has a non-null logo",
-              len(non_null_logo) >= 1,
-              f"non_null_logo_count={len(non_null_logo)}")
-        # also confirm description included in full mode
-        has_desc_key = all("description" in o for o in full)
-        check("all outlets include 'description' key in full mode",
-              has_desc_key)
-
-    # ---------- E: GZip on /api/bootstrap ----------
-    header("E. GET /api/bootstrap with Accept-Encoding: gzip")
-    # Use a fresh session with stream=True + raw body to inspect Content-Encoding
-    # (requests auto-decompresses gzip but exposes the raw header.)
-    r = requests.get(f"{BASE_URL}/bootstrap",
-                     headers={"Accept-Encoding": "gzip"}, timeout=30)
-    check("bootstrap w/gzip 200", r.status_code == 200, f"status={r.status_code}")
-    ce = r.headers.get("Content-Encoding", "")
-    check("Content-Encoding: gzip header present",
-          ce.lower() == "gzip", f"Content-Encoding={ce!r}")
-    # r.json() should still work — requests decompresses under the hood
-    try:
-        j = r.json()
-        check("decoded body is valid JSON with plazas/outlets/offers",
-              isinstance(j, dict) and {"plazas", "outlets", "offers"}.issubset(j.keys()))
-    except Exception as e:
-        check("decoded body is valid JSON with plazas/outlets/offers",
-              False, f"json parse error: {e}")
-
-    # Also confirm the compressed bytes are actually smaller than uncompressed
-    try:
-        compressed_len = int(r.headers.get("Content-Length", "0"))
-        raw_len = len(r.content)  # requests already decoded it
-        # compressed content length (if provided) should be <= raw length
-        if compressed_len:
-            print(f"  info  Content-Length (compressed) = {compressed_len}, "
-                  f"decoded len = {raw_len}")
-    except Exception:
-        pass
-
-    # ---------- G: smoke regression on prior endpoints ----------
-    header("G. Smoke regression")
-    smoke_specs = [
-        ("GET /plazas", "GET", f"{BASE_URL}/plazas", {}, None),
-        ("GET /offers", "GET", f"{BASE_URL}/offers", {}, None),
-        ("GET /menu", "GET", f"{BASE_URL}/menu", {}, None),
-        ("GET /admin/analytics", "GET", f"{BASE_URL}/admin/analytics", auth_headers, None),
-        ("GET /admin/feedback", "GET", f"{BASE_URL}/admin/feedback", auth_headers, None),
-        ("GET /admin/notify-requests", "GET", f"{BASE_URL}/admin/notify-requests",
-         auth_headers, None),
-        ("GET /admin/offer-claims", "GET", f"{BASE_URL}/admin/offer-claims", auth_headers, None),
-        ("GET /admin/offer-claims/export", "GET",
-         f"{BASE_URL}/admin/offer-claims/export", auth_headers, None),
-    ]
-    for label, method, url, headers, body in smoke_specs:
-        r = requests.request(method, url, headers=headers, json=body, timeout=60)
-        check(f"{label} 200", r.status_code == 200, f"status={r.status_code} body={r.text[:200]}")
-        if label.endswith("export"):
-            ct = r.headers.get("Content-Type", "")
-            check("export content-type is xlsx",
-                  "spreadsheetml.sheet" in ct, f"ct={ct}")
-
-    # ---------- H: one-mobile-per-day guard ----------
-    header("H. POST /api/offer-claims one-mobile-per-day soft guard (9812345670)")
-    # first call
-    r1 = requests.post(f"{BASE_URL}/offer-claims",
-                       json={"name": "Ramesh Patel", "mobile": "9812345670"},
-                       timeout=30)
-    check("first claim 200", r1.status_code == 200,
-          f"status={r1.status_code} body={r1.text[:200]}")
-    claim1 = r1.json() if r1.status_code == 200 else {}
-    first_token = claim1.get("token", "")
-    first_id = claim1.get("id", "")
-    check("first claim has 8-char token", len(first_token) == 8, f"token={first_token}")
-    check("first claim already_claimed not true",
-          not claim1.get("already_claimed"), f"val={claim1.get('already_claimed')}")
-
-    # second call same mobile
-    r2 = requests.post(f"{BASE_URL}/offer-claims",
-                       json={"name": "Ramesh P", "mobile": "9812345670"},
-                       timeout=30)
-    check("second claim 200", r2.status_code == 200, f"status={r2.status_code}")
-    claim2 = r2.json() if r2.status_code == 200 else {}
-    check("second claim already_claimed == true",
-          claim2.get("already_claimed") is True, f"val={claim2.get('already_claimed')}")
-    check("second claim token == first token",
-          claim2.get("token") == first_token,
-          f"t1={first_token} t2={claim2.get('token')}")
-    check("second claim id == first id",
-          claim2.get("id") == first_id, f"id1={first_id} id2={claim2.get('id')}")
-
-    # cleanup
-    if first_id:
-        rd = requests.delete(f"{BASE_URL}/admin/offer-claims/{first_id}",
-                             headers=auth_headers, timeout=30)
-        check("cleanup: DELETE throwaway claim 200",
-              rd.status_code == 200, f"status={rd.status_code}")
-
-    # ---------- I: Image fields — PUT with image2/image3 set then null ----------
-    header("I. PUT /api/plazas/{id} image2/image3 round-trip")
-    plist = requests.get(f"{BASE_URL}/plazas", timeout=30).json()
-    if not plist:
-        check("at least one plaza exists", False, "empty plaza list")
-    else:
-        # Pick one (prefer a Chavan or any — keep original payload)
-        target = plist[0]
-        pid = target["id"]
-        original_image2 = target.get("image2")
-        original_image3 = target.get("image3")
-        print(f"  using plaza {target.get('name')} ({pid[:8]}), "
-              f"original image2={original_image2!r} image3={original_image3!r}")
-
-        def build_put_body(plaza_doc, image2, image3):
-            # PlazaCreate fields only
-            keep = ["name", "city", "status", "is_head_office", "description",
-                    "address", "image", "gallery", "google_maps_url",
-                    "contact_phone", "whatsapp_number", "expected_opening",
-                    "order_index", "is_offers_enabled"]
-            body = {k: plaza_doc.get(k) for k in keep if k in plaza_doc}
-            body["image2"] = image2
-            body["image3"] = image3
-            return body
-
-        test_img2 = "https://example.com/qa-img2.jpg"
-        test_img3 = "https://example.com/qa-img3.jpg"
-
-        # SET
-        body = build_put_body(target, test_img2, test_img3)
-        r = requests.put(f"{BASE_URL}/plazas/{pid}",
-                         headers=auth_headers, json=body, timeout=30)
-        check("PUT plaza image2/image3 200", r.status_code == 200,
-              f"status={r.status_code} body={r.text[:200]}")
-        if r.status_code == 200:
-            echoed = r.json()
-            check("response echoes image2", echoed.get("image2") == test_img2,
-                  f"got={echoed.get('image2')}")
-            check("response echoes image3", echoed.get("image3") == test_img3,
-                  f"got={echoed.get('image3')}")
-
-        # GET re-read
-        g = requests.get(f"{BASE_URL}/plazas/{pid}", timeout=30)
-        check("GET plaza 200", g.status_code == 200)
-        if g.status_code == 200:
-            back = g.json()
-            check("GET image2 persisted", back.get("image2") == test_img2,
-                  f"got={back.get('image2')}")
-            check("GET image3 persisted", back.get("image3") == test_img3,
-                  f"got={back.get('image3')}")
-
-        # Now set to null
-        body_null = build_put_body(target, None, None)
-        r = requests.put(f"{BASE_URL}/plazas/{pid}",
-                         headers=auth_headers, json=body_null, timeout=30)
-        check("PUT plaza image2=null/image3=null 200", r.status_code == 200,
-              f"status={r.status_code}")
-        g = requests.get(f"{BASE_URL}/plazas/{pid}", timeout=30)
-        if g.status_code == 200:
-            back = g.json()
-            check("GET image2 is None after null PUT",
-                  back.get("image2") is None, f"got={back.get('image2')}")
-            check("GET image3 is None after null PUT",
-                  back.get("image3") is None, f"got={back.get('image3')}")
-
-        # Restore original
-        body_restore = build_put_body(target, original_image2, original_image3)
-        r = requests.put(f"{BASE_URL}/plazas/{pid}",
-                         headers=auth_headers, json=body_restore, timeout=30)
-        check("PUT plaza RESTORE original payload 200",
-              r.status_code == 200, f"status={r.status_code}")
-
-    # ---------- Summary ----------
-    print("")
-    print(f"{YELLOW}============================================={RESET}")
-    print(f"TOTAL: {PASS+FAIL}  {GREEN}PASS={PASS}{RESET}  {RED}FAIL={FAIL}{RESET}")
-    print(f"{YELLOW}============================================={RESET}")
-    if FAILURES:
-        print(f"\n{RED}FAILURES:{RESET}")
-        for f in FAILURES:
-            print(f"  - {f}")
-        sys.exit(1)
-    sys.exit(0)
+        expect("D2-3: Tansa has at least 2 outlets", False, f"got={len(tansa_names)}")
+    assert_priority_then_alpha("D4 Tansa", tansa_names)
 
 
-if __name__ == "__main__":
-    main()
+# --- E. Anand plaza ----------------------------------------------------------
+print("=" * 60)
+print("E. Anand plaza")
+if not ANAND_ID:
+    expect("E1: Anand plaza found via /api/plazas", False, "no plaza named 'Anand' in response")
+else:
+    r = requests.get(f"{API}/outlets", params={"lite": "true", "plaza_id": ANAND_ID}, timeout=30)
+    expect("E1: GET /outlets?lite=true&plaza_id=Anand → 200", r.status_code == 200, f"status={r.status_code}")
+    anand = r.json() if r.status_code == 200 else []
+    anand_names = [o.get("name", "") for o in anand]
+    print(f"   Anand outlet names ({len(anand_names)}): {anand_names}")
+    if anand_names:
+        expect("E2: Anand[0] == 'Gallops Restaurant'", anand_names[0] == "Gallops Restaurant", f"got='{anand_names[0]}'")
+    # Only priority brand should be Gallops Restaurant
+    other_priority = [n for n in anand_names[1:] if brand_priority_index(n) < len(PRIORITY_PATTERNS)]
+    expect("E3: No other priority brand present in Anand", len(other_priority) == 0, f"others={other_priority}")
+    # Tail alphabetical
+    tail = anand_names[1:] if anand_names else []
+    tail_lower = [n.lower() for n in tail]
+    expect("E4: Anand tail is alphabetical (case-insensitive)",
+           tail_lower == sorted(tail_lower), f"got={tail_lower} expected={sorted(tail_lower)}")
+
+
+# --- F. Full mode (no lite) on Limbdi ----------------------------------------
+print("=" * 60)
+print("F. Full mode on Limbdi")
+r = requests.get(f"{API}/outlets", params={"plaza_id": LIMBDI_ID}, timeout=60)
+expect("F1: GET /outlets?plaza_id=Limbdi (full) → 200", r.status_code == 200, f"status={r.status_code}")
+full_limbdi = r.json() if r.status_code == 200 else []
+full_names = [o.get("name", "") for o in full_limbdi]
+print(f"   Full Limbdi names ({len(full_names)}): {full_names}")
+
+if len(full_names) >= 3:
+    expect("F2: Full Limbdi[0] == 'Gallops Restaurant'", full_names[0] == "Gallops Restaurant", f"got='{full_names[0]}'")
+    expect("F3: Full Limbdi[1] is Domino's", brand_priority_index(full_names[1]) == 1, f"got='{full_names[1]}'")
+    expect("F4: Full Limbdi[2] is La Pino'z", brand_priority_index(full_names[2]) == 3, f"got='{full_names[2]}'")
+assert_priority_then_alpha("F5 Full Limbdi", full_names)
+
+# F6: full mode includes logo/image2/image3/description keys
+if full_limbdi:
+    sample = full_limbdi[0]
+    keys_present = [k for k in ("logo", "image2", "image3", "description") if k in sample]
+    expect("F6: Full-mode outlet includes logo/image2/image3/description keys",
+           set(keys_present) == {"logo", "image2", "image3", "description"},
+           f"present={keys_present} sample_keys={sorted(sample.keys())}")
+    # Verify on every outlet, not just the first
+    all_have = all(all(k in o for k in ("logo", "image2", "image3", "description")) for o in full_limbdi)
+    expect("F7: Every full-mode Limbdi outlet has logo/image2/image3/description keys",
+           all_have, f"missing on at least one outlet" if not all_have else "")
+
+
+# --- G. Bootstrap ------------------------------------------------------------
+print("=" * 60)
+print("G. Bootstrap brand-priority sort")
+r = requests.get(f"{API}/bootstrap", timeout=60)
+expect("G1: GET /bootstrap → 200", r.status_code == 200, f"status={r.status_code}")
+boot = r.json() if r.status_code == 200 else {}
+boot_outlets = boot.get("outlets", [])
+expect("G2: Bootstrap has outlets array", isinstance(boot_outlets, list) and len(boot_outlets) > 0,
+       f"len={len(boot_outlets) if isinstance(boot_outlets, list) else 'n/a'}")
+
+# Per-plaza ordering check
+groups = {}
+for o in boot_outlets:
+    groups.setdefault(o.get("plaza_id"), []).append(o.get("name", ""))
+
+# Each plaza's outlets must be in priority->alphabetical order WITHIN the global stream
+# But globally sorted means: across all outlets in the array, they are in (priority, name) order.
+# Stronger: verify each plaza group is brand-sorted internally.
+all_groups_ok = True
+for pid, names in groups.items():
+    if pid is None:
+        continue
+    # The order is the order in the bootstrap response; we just check internal ordering.
+    if not assert_priority_then_alpha(f"G3 plaza={pid[:8]}", names):
+        all_groups_ok = False
+expect("G3 (overall): Every plaza in /bootstrap is brand-sorted internally", all_groups_ok)
+
+# Lite check: verify Bootstrap outlets do NOT contain logo/image2/image3/description
+heavy_present = []
+for o in boot_outlets:
+    for k in ("logo", "image2", "image3", "description"):
+        if k in o:
+            heavy_present.append((o.get("id"), k))
+            break
+expect("G4: Bootstrap outlets are LITE (no logo/image2/image3/description keys)",
+       len(heavy_present) == 0, f"violations={heavy_present[:5]}")
+
+
+# --- H. Smoke regression -----------------------------------------------------
+print("=" * 60)
+print("H. Smoke regression")
+token = login_admin()
+auth_headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+# H2: privacy
+r = requests.get(f"{API}/privacy", timeout=30)
+ctype = r.headers.get("content-type", "")
+expect("H2: GET /privacy → 200 + HTML",
+       r.status_code == 200 and ("text/html" in ctype or r.text.lstrip().lower().startswith("<!doctype") or "<html" in r.text.lower()),
+       f"status={r.status_code} ctype={ctype}")
+
+# H3: terms
+r = requests.get(f"{API}/terms", timeout=30)
+ctype = r.headers.get("content-type", "")
+expect("H3: GET /terms → 200 + HTML",
+       r.status_code == 200 and ("text/html" in ctype or r.text.lstrip().lower().startswith("<!doctype") or "<html" in r.text.lower()),
+       f"status={r.status_code} ctype={ctype}")
+
+# H4: xlsx export
+if token:
+    r = requests.get(f"{API}/admin/offer-claims/export", headers=auth_headers, timeout=60)
+    ctype = r.headers.get("content-type", "")
+    expect("H4: GET /admin/offer-claims/export with admin auth → 200",
+           r.status_code == 200, f"status={r.status_code}")
+    expect("H4b: xlsx Content-Type",
+           "spreadsheetml.sheet" in ctype or "officedocument" in ctype,
+           f"ctype={ctype}")
+
+# H5: one-mobile-per-day soft guard on /offer-claims (cleanup after)
+test_mobile = "9812340099"
+created_ids = []
+try:
+    payload = {"name": "QA Smoke Tester", "mobile": test_mobile}
+    r1 = requests.post(f"{API}/offer-claims", json=payload, timeout=30)
+    expect("H5a: POST /offer-claims first call → 200",
+           r1.status_code == 200, f"status={r1.status_code} body={r1.text[:200]}")
+    body1 = r1.json() if r1.status_code == 200 else {}
+    token1 = body1.get("token")
+    id1 = body1.get("id")
+    if id1:
+        created_ids.append(id1)
+    expect("H5b: First claim returns 8-char token, no already_claimed flag",
+           bool(token1) and len(token1) == 8 and not body1.get("already_claimed"),
+           f"token={token1} already_claimed={body1.get('already_claimed')}")
+
+    # Retry same mobile
+    r2 = requests.post(f"{API}/offer-claims", json=payload, timeout=30)
+    expect("H5c: POST /offer-claims same mobile (retry) → 200",
+           r2.status_code == 200, f"status={r2.status_code}")
+    body2 = r2.json() if r2.status_code == 200 else {}
+    token2 = body2.get("token")
+    id2 = body2.get("id")
+    expect("H5d: Soft guard returns SAME token + already_claimed=true",
+           token2 == token1 and id2 == id1 and body2.get("already_claimed") is True,
+           f"token1={token1} token2={token2} same_id={id1==id2} already={body2.get('already_claimed')}")
+finally:
+    # Cleanup: delete created claim(s)
+    if token and created_ids:
+        for cid in set(created_ids):
+            dr = requests.delete(f"{API}/admin/offer-claims/{cid}", headers=auth_headers, timeout=30)
+            print(f"   Cleanup DELETE /admin/offer-claims/{cid} → {dr.status_code}")
+
+
+# --- Summary -----------------------------------------------------------------
+print("\n" + "=" * 60)
+total = len(results)
+passed = sum(1 for _, ok, _ in results if ok)
+failed = total - passed
+print(f"TOTAL: {passed}/{total} PASS  ({failed} FAIL)")
+if failed:
+    print("\nFailures:")
+    for label, ok, detail in results:
+        if not ok:
+            print(f"  - {label}: {detail}")
+
+sys.exit(0 if failed == 0 else 1)

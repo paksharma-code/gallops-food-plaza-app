@@ -429,6 +429,56 @@ async def list_plazas(status: Optional[str] = Query(None)):
 _LITE_OUTLET_OMIT = {"logo": 0, "image2": 0, "image3": 0, "description": 0}
 
 
+# ---------------------------------------------------------------------------
+# Outlet brand priority — flagship + key franchise brands always come first,
+# everything else falls back to alphabetical. New plazas / new outlets pick
+# up this ordering automatically. Add new brands to PRIORITY_BRANDS below.
+# ---------------------------------------------------------------------------
+import re as _re_brand  # noqa: E402
+
+# Order matters — index = priority (lower = appears first).
+PRIORITY_BRANDS: list[tuple[str, list[str]]] = [
+    # (canonical_label, regex patterns matched against normalised name)
+    ("Gallops Restaurant", [r"^gallops\s+restaurant$", r"^gallops$"]),
+    # Match "Domino's", "Dominos", "Dominoz" (typo variant)
+    ("Domino's",           [r"^domino[s'\u2019z]*\b"]),
+    ("Subway",             [r"^subway\b"]),
+    # Match "La Pino'z Pizza", "La Pinoz", "Lapinoz", "La Pino's", "Lapinoz Pizza"
+    ("La Pino'z Pizza",    [r"^la\s*pino[\u2019'z]*\b", r"^lapino[\u2019'z]*\b"]),
+    ("Lord Petrick",       [r"^lord\s+petrick\b"]),
+    ("MMC",                [r"^mmc\b"]),
+]
+# Pre-compile for speed
+_PRIORITY_REGEX = [
+    (label, [_re_brand.compile(p, _re_brand.IGNORECASE) for p in patterns])
+    for label, patterns in PRIORITY_BRANDS
+]
+
+
+def _outlet_priority(name: str) -> int:
+    """Return the index (0..N-1) of this outlet's brand priority. Anything not
+    matching any priority brand falls back to a high number so it sorts AFTER
+    the priority brands (alphabetically among themselves)."""
+    normalised = _re_brand.sub(r"\s+", " ", (name or "").strip().lower())
+    for idx, (_label, patterns) in enumerate(_PRIORITY_REGEX):
+        for pat in patterns:
+            if pat.search(normalised):
+                return idx
+    return len(_PRIORITY_REGEX) + 100  # well above any brand index
+
+
+def _sorted_outlets(outlets: list[dict]) -> list[dict]:
+    """Sort outlets by (brand priority, name alphabetical, original created_at)."""
+    return sorted(
+        outlets,
+        key=lambda o: (
+            _outlet_priority(o.get("name", "")),
+            (o.get("name") or "").strip().lower(),
+            (o.get("created_at") or ""),
+        ),
+    )
+
+
 @api_router.get("/bootstrap")
 async def bootstrap():
     """
@@ -453,6 +503,9 @@ async def bootstrap():
         o.setdefault("is_offers_enabled", True)
         o.setdefault("is_reservation_enabled", False)
         o.setdefault("time_slots", None)
+    # Apply brand-priority sort so Gallops Restaurant / Domino's / Subway /
+    # La Pino'z / Lord Petrick / MMC always come first inside each plaza.
+    outlets_raw = _sorted_outlets(outlets_raw)
     return {
         "plazas": [Plaza(**p).dict() for p in plazas_raw],
         # outlets are lite — logos/extra images intentionally omitted
@@ -545,11 +598,15 @@ async def list_outlets(
             o.setdefault("is_offers_enabled", True)
             o.setdefault("is_reservation_enabled", False)
             o.setdefault("time_slots", None)
+        # Apply brand-priority sort (Gallops Restaurant first, then Domino's,
+        # Subway, La Pino'z, Lord Petrick, MMC, then alphabetical).
+        items = _sorted_outlets(items)
         # Return raw dicts so the omitted fields stay omitted in the
         # serialised HTTP response (a `response_model=List[Outlet]`
         # decorator would otherwise re-inject them with default values).
         return items
-    return [Outlet(**o).dict() for o in items]
+    full = [Outlet(**o).dict() for o in items]
+    return _sorted_outlets(full)
 
 
 @api_router.get("/outlets/{outlet_id}", response_model=Outlet)
