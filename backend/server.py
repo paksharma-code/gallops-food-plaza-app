@@ -1702,6 +1702,17 @@ _static_dir = _os.path.join(_os.path.dirname(__file__), "static")
 if _os.path.isdir(_static_dir):
     app.mount("/api/static", StaticFiles(directory=_static_dir), name="static")
 
+# Mount the store_assets folder so the customer can download icon /
+# feature graphic / screenshots / metadata directly from the public
+# preview URL for upload to Play Console / App Store Connect.
+_store_assets_dir = _os.path.join(_os.path.dirname(__file__), "..", "store_assets")
+if _os.path.isdir(_store_assets_dir):
+    app.mount(
+        "/api/store-assets",
+        StaticFiles(directory=_store_assets_dir),
+        name="store-assets",
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
