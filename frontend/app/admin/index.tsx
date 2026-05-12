@@ -1938,6 +1938,9 @@ function OutletEditor({ initial, plazas = [], onClose, onSaved }: any) {
   const [address, setAddress] = useState(initial?.address || '');
   const [reservationOn, setReservationOn] = useState(!!initial?.is_reservation_enabled);
   const [offersOn, setOffersOn] = useState(initial ? initial.is_offers_enabled !== false : true);
+  const [orderIndex, setOrderIndex] = useState(
+    initial?.order_index != null ? String(initial.order_index) : '0'
+  );
   const [saving, setSaving] = useState(false);
   const [plazaPickerOpen, setPlazaPickerOpen] = useState(false);
 
@@ -1992,6 +1995,7 @@ function OutletEditor({ initial, plazas = [], onClose, onSaved }: any) {
         address,
         is_reservation_enabled: reservationOn,
         is_offers_enabled: offersOn,
+        order_index: parseInt(orderIndex, 10) || 0,
       };
       if (initial) await api.adminUpdateOutlet(initial.id, data);
       else await api.adminCreateOutlet(data);
@@ -2112,6 +2116,14 @@ function OutletEditor({ initial, plazas = [], onClose, onSaved }: any) {
       <ImagePickerBlock label="Logo / Image" value={logo} onChangeText={setLogo} onPick={pickImage} testID="outlet-logo" />
       <ImagePickerBlock label="Gallery Image 2 (optional)" value={image2} onChangeText={setImage2} onPick={pickImage2} testID="outlet-image2" />
       <ImagePickerBlock label="Gallery Image 3 (optional)" value={image3} onChangeText={setImage3} onPick={pickImage3} testID="outlet-image3" />
+
+      <AdminField
+        label="Display Order (0 = auto · 1..N = custom slot within plaza)"
+        value={orderIndex}
+        onChangeText={setOrderIndex}
+        keyboardType="numeric"
+        testID="outlet-order-index-input"
+      />
       <View style={styles.toggleRow}>
         <Text style={styles.adminLabel}>Reservations Enabled</Text>
         <Switch value={reservationOn} onValueChange={setReservationOn} testID="outlet-reservation-toggle" />

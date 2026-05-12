@@ -54,6 +54,12 @@ RENAMES: list[tuple[str, str]] = [
     ("Teapost", "Tea Post"),
     ("Schmitten Chocolate", "Schmitten"),
     ("Mahindra E.V Fast Charging Station", "Mahindra EV Charging Station"),
+    ("Waffle", "Great Indian Waffle"),
+]
+
+# Outlets to DELETE outright from Fedra (already-applied cleanup).
+DELETIONS: list[str] = [
+    "Sahaj Oil",
 ]
 
 # Explicit per-outlet ordering for Fedra (positions 6..19).
@@ -119,6 +125,17 @@ async def main():
             print(f"  ✏️  renamed '{old}' → '{new}'")
         else:
             print(f"  ✓  '{new}' already canonical (or not present)")
+
+    # 1b. Delete outlets that are no longer wanted at Fedra.
+    for name in DELETIONS:
+        res = await outlets.delete_one(
+            {
+                "plaza_id": FEDRA_PLAZA_ID,
+                "name": {"$regex": f"^{name}$", "$options": "i"},
+            }
+        )
+        if res.deleted_count:
+            print(f"  🗑️  deleted '{name}'")
 
     # 2. Ensure every outlet in FEDRA_ORDER exists; create missing ones with
     #    placeholder defaults from NEW_OUTLETS.
