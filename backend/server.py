@@ -130,6 +130,7 @@ class Outlet(BaseModel):
     address: Optional[str] = ""
     is_reservation_enabled: bool = False
     is_offers_enabled: bool = True
+    order_index: int = 0  # 0 = sort alphabetically; >0 = explicit position within a plaza
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -147,6 +148,7 @@ class OutletCreate(BaseModel):
     address: Optional[str] = ""
     is_reservation_enabled: bool = False
     is_offers_enabled: bool = True
+    order_index: int = 0
 
 
 class MenuItem(BaseModel):
@@ -468,20 +470,30 @@ def _outlet_priority(name: str) -> int:
 
 
 def _sorted_outlets(outlets: list[dict]) -> list[dict]:
-    """Sort outlets by (brand priority, name alphabetical, original created_at).
+    """Sort outlets within a plaza by:
+
+      1. Brand priority (Gallops, Domino's, Subway, La Pino'z, Lord Petrick, MMC).
+      2. For non-priority outlets:
+         - First by explicit `order_index` (admin-curated, 1..N).
+         - Then alphabetically (case-insensitive).
+      3. Created_at as a stable tie-breaker.
 
     `created_at` may be a `datetime` (modern Pydantic insert) OR an ISO `str`
-    (early seed-script insert). Coerce to `str` so cross-type compares don't
-    explode when ties happen on (priority, name).
+    (legacy seed-script insert). Coerce to `str` for safe comparison.
     """
-    return sorted(
-        outlets,
-        key=lambda o: (
-            _outlet_priority(o.get("name", "")),
-            (o.get("name") or "").strip().lower(),
+    def key(o: dict):
+        bp = _outlet_priority(o.get("name", ""))
+        oi = int(o.get("order_index") or 0)
+        has_oi = oi > 0
+        return (
+            bp,                              # priority brands always first
+            0 if has_oi else 1,              # explicitly-ordered outlets next
+            oi if has_oi else 0,             # by their order_index
+            (o.get("name") or "").strip().lower(),  # then alphabetical
             str(o.get("created_at") or ""),
-        ),
-    )
+        )
+
+    return sorted(outlets, key=key)
 
 
 @api_router.get("/bootstrap")
