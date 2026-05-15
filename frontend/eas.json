@@ -9,21 +9,26 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal",
-      "android": {
+  "distribution": "internal",
+  "env": {
+    "EXPO_PUBLIC_BACKEND_URL": "https://gallops-reserve-dine.preview.emergentagent.com"
+  },
+  "android": {
         "buildType": "apk"
       }
     },
-    "production": {
-      "autoIncrement": true,
-      "android": {
-        "buildType": "app-bundle"
-      },
-      "ios": {
-        "resourceClass": "m-medium"
-      }
-    }
+   "production": {
+  "autoIncrement": true,
+  "env": {
+    "EXPO_PUBLIC_BACKEND_URL": "https://gallops-reserve-dine.preview.emergentagent.com"
   },
+  "android": {
+    "buildType": "app-bundle"
+  },
+  "ios": {
+    "resourceClass": "m-medium"
+  }
+},
   "submit": {
     "production": {
       "android": {
