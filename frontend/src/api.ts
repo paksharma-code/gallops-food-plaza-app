@@ -1,7 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// PRODUCTION FALLBACK: Hardcoded production backend URL.
+const PRODUCTION_BACKEND_URL = 'https://gallops-reserve-dine.preview.emergentagent.com';
+
 export const API_BASE =
-  (process.env.EXPO_PUBLIC_BACKEND_URL || '').replace(/\/$/, '') + '/api';
+  ((process.env.EXPO_PUBLIC_BACKEND_URL || PRODUCTION_BACKEND_URL).replace(/\/$/, '')) + '/api';
 
 const TOKEN_KEY = 'gallops_admin_token';
 
